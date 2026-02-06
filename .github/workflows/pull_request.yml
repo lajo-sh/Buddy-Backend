@@ -1,0 +1,33 @@
+name: Pull Request
+on: [pull_request, workflow_dispatch]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.19.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: pnpm i
+
+      - name: Run unit tests
+        run: pnpm test:run
+
+      - name: Check for TypeScript errors
+        run: pnpm tsc --noEmit
+
+      - name: Check for linter errors
+        run: pnpm lint
+
+      - name: Check for formatting errors
+        run: pnpm format:check

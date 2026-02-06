@@ -1,0 +1,1 @@
+ALTER TABLE "linkedDevices" ADD COLUMN "devEnabled" boolean DEFAULT false;

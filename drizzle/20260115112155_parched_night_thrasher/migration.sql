@@ -1,0 +1,1 @@
+ALTER TABLE "linkedDevices" ADD COLUMN "last_online" integer;

@@ -1,0 +1,1 @@
+ALTER TABLE "deviceConfig" ADD COLUMN "family_link_anti_circumvention" boolean DEFAULT false NOT NULL;
