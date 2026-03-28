@@ -48,7 +48,6 @@ describe("Database Operations", () => {
         disableBuddy: false,
         blockAdultSites: true,
         familyLinkAntiCircumvention: true,
-        newContactAlerts: true,
         blockStrangers: false,
         notifyDangerousMessages: true,
         notifyNewContactAdded: true,

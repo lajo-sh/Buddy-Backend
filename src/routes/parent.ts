@@ -338,7 +338,7 @@ function createParentRouter(
             key: "new_people",
             title: "New contact alerts",
             description: "Get notified when your child chats with someone new.",
-            defaultValue: cfg.newContactAlerts,
+            defaultValue: cfg.notifyNewContactAdded,
           },
           {
             key: "block_strangers",
@@ -406,7 +406,7 @@ function createParentRouter(
     const keyMap: Record<string, keyof typeof deviceConfig.$inferSelect> = {
       disable_buddy: "disableBuddy",
       adult_sites: "blockAdultSites",
-      new_people: "newContactAlerts",
+      new_people: "notifyNewContactAdded",
       block_strangers: "blockStrangers",
       notify_dangerous_messages: "notifyDangerousMessages",
       notify_new_contact_added: "notifyNewContactAdded",
