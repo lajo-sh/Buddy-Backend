@@ -1,7 +1,18 @@
-import { integer, pgTable, varchar, boolean, text, pgEnum } from "drizzle-orm/pg-core";
+import {
+  integer,
+  pgTable,
+  varchar,
+  boolean,
+  text,
+  pgEnum,
+} from "drizzle-orm/pg-core";
 import { defineRelations, sql } from "drizzle-orm";
 
-export const galleryScanningMode = pgEnum("galleryScanningMode", ["delete", "notify", "none"]); 
+export const galleryScanningMode = pgEnum("galleryScanningMode", [
+  "delete",
+  "notify",
+  "none",
+]);
 
 /** Parent user accounts with email auth and push notification tokens */
 export const users = pgTable("users", {
@@ -41,6 +52,7 @@ export const deviceConfig = pgTable("deviceConfig", {
   notifyNewContactAdded: boolean("notify_new_contact_added")
     .notNull()
     .default(true),
+  galleryScanningMode: galleryScanningMode().default("notify").notNull(),
 });
 
 /** Stores flagged messages and content alerts for parent review */

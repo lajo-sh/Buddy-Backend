@@ -37,6 +37,8 @@ vi.mock("./src/db/db", async () => {
       "devEnabled" BOOLEAN DEFAULT false
     );
     
+    CREATE TYPE "galleryScanningMode" AS ENUM ('delete', 'notify', 'none');
+
     CREATE TABLE IF NOT EXISTS "deviceConfig" (
       "id" SERIAL PRIMARY KEY,
       "device_id" INTEGER NOT NULL UNIQUE,
@@ -46,7 +48,8 @@ vi.mock("./src/db/db", async () => {
       "new_contact_alerts" BOOLEAN NOT NULL DEFAULT true,
       "block_strangers" BOOLEAN NOT NULL DEFAULT false,
       "notify_dangerous_messages" BOOLEAN NOT NULL DEFAULT true,
-      "notify_new_contact_added" BOOLEAN NOT NULL DEFAULT true
+      "notify_new_contact_added" BOOLEAN NOT NULL DEFAULT true,
+      "galleryScanningMode" "galleryScanningMode" NOT NULL DEFAULT 'notify'
     );
     
     CREATE TABLE IF NOT EXISTS "alerts" (
