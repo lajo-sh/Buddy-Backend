@@ -552,6 +552,91 @@ app.ws("/kid/connect", (ws, req) => {
       return;
     }
 
+    if (data.type === "nsfw_image_detected") {
+      const deviceId = (ws as unknown as KidWebSocket).deviceId;
+      if (!deviceId) {
+        ws.send(
+          JSON.stringify({ success: false, reason: "Not authenticated" }),
+        );
+        return;
+      }
+
+      try {
+        const device = await db
+          .select()
+          .from(linkedDevices)
+          .where(eq(linkedDevices.id, deviceId))
+          .limit(1);
+
+        if (device.length === 0) {
+          logger.error({ deviceId }, "Device not found for nsfw image event");
+          ws.send(JSON.stringify({ success: true }));
+          return;
+        }
+
+        const parentId = device[0]!.parentId;
+        const deviceName = device[0]!.nickname;
+
+        const parent = await db
+          .select({ pushTokens: users.pushTokens })
+          .from(users)
+          .where(eq(users.id, parentId))
+          .limit(1);
+
+        if (
+          parent.length > 0 &&
+          parent[0]!.pushTokens &&
+          parent[0]!.pushTokens.length > 0
+        ) {
+          await pushNotificationQueue.add("nsfw-image-alert", {
+            pushTokens: parent[0]!.pushTokens,
+            notification: {
+              title: `⚠️ NSFW Image Detected`,
+              body: `An NSFW image was found on ${deviceName}`,
+              data: {
+                type: "nsfw_image_detected",
+                screen: "DeviceDetail",
+                deviceId: deviceId.toString(),
+                deviceName: deviceName,
+              },
+              channelId: "alerts",
+            },
+          });
+
+          await db.insert(alerts).values({
+            deviceId: deviceId,
+            parentId: parentId,
+            category: "nsfw_image",
+            title: `NSFW Image Detected`,
+            message: `An NSFW image was found on ${deviceName}`,
+            summary:
+              "An image containing nudity or sexually explicit content was detected.",
+            confidence: 100,
+            packageName: (data.packageName as string) || "unknown",
+            timestamp: Math.floor(Date.now() / 1000),
+            read: false,
+          });
+
+          logger.info({ parentId, deviceId }, "NSFW image notification sent");
+        }
+
+        ws.send(JSON.stringify({ success: true }));
+      } catch (e) {
+        logger.error(
+          { error: e, deviceId },
+          "Failed to process nsfw image event",
+        );
+        ws.send(
+          JSON.stringify({
+            success: false,
+            reason: "Failed to process nsfw image event",
+          }),
+        );
+      }
+
+      return;
+    }
+
     logger.debug(
       { data, deviceId: (ws as unknown as KidWebSocket).deviceId },
       "Unknown message type received",

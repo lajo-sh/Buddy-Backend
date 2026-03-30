@@ -93,6 +93,7 @@ router.get("/kid/getconfig", authDevice, async (req, res) => {
         disableBuddy: cfg.disableBuddy,
         blockAdultSites: cfg.blockAdultSites,
         familyLinkAntiCircumvention: cfg.familyLinkAntiCircumvention,
+        galleryScanningMode: cfg.galleryScanningMode,
       },
     });
   } catch (e) {
