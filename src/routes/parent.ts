@@ -1,7 +1,7 @@
 import express from "express";
 import { authParent } from "../middleware/auth";
 import { db } from "../db/db";
-import { deviceConfig, linkedDevices, users, alerts } from "../db/schema";
+import { deviceConfig, linkedDevices, users, alerts, galleryScanningMode } from "../db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { isValidPushToken } from "../notifications/push";
 import { logger } from "../lib/pino";
@@ -23,12 +23,13 @@ const ControlsUpdateSchema = z.object({
     "disable_buddy",
     "adult_sites",
     "new_people",
+    "gallery_scanning_mode",
     "block_strangers",
     "notify_dangerous_messages",
     "notify_new_contact_added",
     "family_link_anti_circumvention",
   ]),
-  value: z.boolean(),
+  value: z.any(),
 });
 
 /** Validates device nickname changes */
@@ -358,6 +359,12 @@ function createParentRouter(
             description: "Notify when a new contact is added.",
             defaultValue: cfg.notifyNewContactAdded,
           },
+          {
+            key: "gallery_scanning_mode",
+            title: "Gallery scanning",
+            description: "Scan gallery for inappropriate images",
+            defaultValue: cfg.galleryScanningMode,
+          }
         ],
       });
     } catch (e) {
@@ -411,6 +418,7 @@ function createParentRouter(
       notify_dangerous_messages: "notifyDangerousMessages",
       notify_new_contact_added: "notifyNewContactAdded",
       family_link_anti_circumvention: "familyLinkAntiCircumvention",
+      gallery_scanning_mode: "galleryScanningMode"
     };
 
     const dbKey = keyMap[key];
