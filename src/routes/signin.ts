@@ -8,6 +8,8 @@ import { eq } from "drizzle-orm";
 import { logger } from "../lib/pino";
 import * as jose from "jose";
 import { getTransporter } from "../email/email";
+import { verifyGoogleIdToken } from "../account/google";
+import { randomUUID } from "node:crypto";
 
 /** Validates signin request body with email and password */
 const SigninBodySchema = z.object({
@@ -31,7 +33,6 @@ const ResetPasswordRequestSchema = z.object({
         .email({ error: "Invalid email" })
         .nonempty({ error: "Email can't be empty" }),
     ),
-  link: z.url({ error: "Invalid link" }),
 });
 
 const ResetPasswordConfirmSchema = z.object({
@@ -39,7 +40,18 @@ const ResetPasswordConfirmSchema = z.object({
   password: z.string().min(1, { error: "Password can't be empty" }),
 });
 
+const GoogleSigninBodySchema = z.object({
+  idToken: z.string().min(1, { error: "Google ID token can't be empty" }),
+});
+
 const router: express.Router = express.Router();
+router.use(express.urlencoded({ extended: true }));
+
+function generate6DigitCode(): string {
+  return Math.floor(Math.random() * 1_000_000)
+    .toString()
+    .padStart(6, "0");
+}
 
 function getResetPasswordSecret(): Uint8Array {
   const secret = process.env.RESET_PASSWORD_JWT_SECRET;
@@ -75,11 +87,122 @@ async function verifyResetPasswordToken(token: string): Promise<number> {
   return payload.id;
 }
 
+function getResetPasswordBaseUrl(): string {
+  const baseUrl = process.env.BASE_URL;
+
+  if (!baseUrl) {
+    logger.error("BASE_URL environment variable not set");
+    throw new Error("BASE_URL not configured");
+  }
+
+  return baseUrl.replace(/\/+$/, "");
+}
+
+function renderResetPasswordPage(
+  token: string,
+  options?: { error?: string; success?: string },
+): string {
+  const title = options?.success ? "Password Updated" : "Reset Password";
+  const message = options?.success
+    ? "Your Buddy password was updated. You can return to the app and sign in with your new password."
+    : "Enter a new password for your Buddy account.";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${title}</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(180deg, #fff5f5 0%, #ffe3e3 100%);
+      color: #1f2937;
+    }
+    main {
+      width: min(92vw, 420px);
+      background: #ffffff;
+      border-radius: 18px;
+      padding: 32px 24px;
+      box-shadow: 0 18px 40px rgba(244, 46, 46, 0.16);
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 28px;
+    }
+    p {
+      margin: 0 0 20px;
+      line-height: 1.5;
+    }
+    form {
+      display: grid;
+      gap: 12px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #d1d5db;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 16px;
+    }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 16px;
+      font-weight: 700;
+      background: #f42e2e;
+      color: white;
+      cursor: pointer;
+    }
+    .error {
+      margin-bottom: 16px;
+      color: #b91c1c;
+      background: #fee2e2;
+      padding: 12px 14px;
+      border-radius: 12px;
+    }
+    .success {
+      margin-bottom: 16px;
+      color: #166534;
+      background: #dcfce7;
+      padding: 12px 14px;
+      border-radius: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${title}</h1>
+    <p>${message}</p>
+    ${options?.error ? `<div class="error">${options.error}</div>` : ""}
+    ${options?.success ? `<div class="success">${options.success}</div>` : ""}
+    ${
+      options?.success
+        ? ""
+        : `<form method="post" action="/reset-password/${encodeURIComponent(token)}">
+      <input type="password" name="password" placeholder="New password" required />
+      <button type="submit">Update password</button>
+    </form>`
+    }
+  </main>
+</body>
+</html>`;
+}
+
 router.post("/resetpassword", async (req, res) => {
   const requestResetParsed = ResetPasswordRequestSchema.safeParse(req.body);
 
   if (requestResetParsed.success) {
-    const { email, link } = requestResetParsed.data;
+    const { email } = requestResetParsed.data;
     logger.info({ email }, "Password reset requested");
 
     const existingUser = (
@@ -96,8 +219,7 @@ router.post("/resetpassword", async (req, res) => {
 
     try {
       const token = await signResetPasswordToken(existingUser.id);
-      const separator = link.includes("?") ? "&" : "?";
-      const resetLink = `${link}${separator}token=${encodeURIComponent(token)}`;
+      const resetLink = `${getResetPasswordBaseUrl()}/reset-password/${encodeURIComponent(token)}`;
 
       await getTransporter().sendMail({
         from: `"Buddy 🐶" <${process.env.SMTP_EMAIL}>`,
@@ -138,7 +260,9 @@ router.post("/resetpassword", async (req, res) => {
   }
 
   try {
-    const userId = await verifyResetPasswordToken(confirmResetParsed.data.token);
+    const userId = await verifyResetPasswordToken(
+      confirmResetParsed.data.token,
+    );
     const hashedPassword = await argon2.hash(confirmResetParsed.data.password);
 
     const updatedUsers = await db
@@ -166,6 +290,87 @@ router.post("/resetpassword", async (req, res) => {
       success: false,
       reason: "Invalid or expired reset token",
     });
+  }
+});
+
+router.get("/reset-password/:token", async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    await verifyResetPasswordToken(token);
+    return res.status(200).type("html").send(renderResetPasswordPage(token));
+  } catch (error) {
+    logger.warn({ error }, "Reset password page opened with invalid token");
+    return res
+      .status(400)
+      .type("html")
+      .send(
+        renderResetPasswordPage(token, {
+          error: "This reset link is invalid or has expired.",
+        }),
+      );
+  }
+});
+
+router.post("/reset-password/:token", async (req, res) => {
+  const { token } = req.params;
+  const parsed = z
+    .object({
+      password: z.string().min(1, { error: "Password can't be empty" }),
+    })
+    .safeParse(req.body);
+
+  if (!parsed.success) {
+    return res
+      .status(400)
+      .type("html")
+      .send(
+        renderResetPasswordPage(token, {
+          error: "Please enter a new password.",
+        }),
+      );
+  }
+
+  try {
+    const userId = await verifyResetPasswordToken(token);
+    const hashedPassword = await argon2.hash(parsed.data.password);
+
+    const updatedUsers = await db
+      .update(users)
+      .set({ password: hashedPassword })
+      .where(eq(users.id, userId))
+      .returning({ id: users.id });
+
+    if (updatedUsers.length === 0) {
+      return res
+        .status(400)
+        .type("html")
+        .send(
+          renderResetPasswordPage(token, {
+            error: "This reset link is invalid or has expired.",
+          }),
+        );
+    }
+
+    logger.info({ userId }, "Password reset completed from hosted form");
+    return res
+      .status(200)
+      .type("html")
+      .send(
+        renderResetPasswordPage(token, {
+          success: "Your password has been updated successfully.",
+        }),
+      );
+  } catch (error) {
+    logger.warn({ error }, "Hosted password reset failed");
+    return res
+      .status(400)
+      .type("html")
+      .send(
+        renderResetPasswordPage(token, {
+          error: "This reset link is invalid or has expired.",
+        }),
+      );
   }
 });
 
@@ -233,6 +438,99 @@ router.post("/signin", async (req, res) => {
     token: jwt,
     reason: "",
   });
+});
+
+router.post("/signin/google", async (req, res) => {
+  const parsed = GoogleSigninBodySchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    logger.warn({ error: parsed.error }, "Google signin validation failed");
+    return res.send({
+      success: false,
+      reason: parsed.error,
+      token: "",
+    });
+  }
+
+  try {
+    const googleProfile = await verifyGoogleIdToken(parsed.data.idToken);
+
+    if (!googleProfile.emailVerified) {
+      logger.warn(
+        { email: googleProfile.email, subject: googleProfile.subject },
+        "Google signin rejected: email not verified by Google",
+      );
+      return res.send({
+        success: false,
+        reason: "Google account email is not verified",
+        token: "",
+      });
+    }
+
+    let existingUser = (
+      await db
+        .select()
+        .from(users)
+        .where(eq(users.email, googleProfile.email))
+        .limit(1)
+    )[0];
+
+    if (!existingUser) {
+      const placeholderPassword = await argon2.hash(randomUUID());
+      const insertedUsers = await db
+        .insert(users)
+        .values({
+          email: googleProfile.email,
+          password: placeholderPassword,
+          emailVerified: true,
+          emailCode: generate6DigitCode(),
+        })
+        .returning();
+
+      existingUser = insertedUsers[0];
+
+      logger.info(
+        { userId: existingUser!.id, email: googleProfile.email },
+        "Created new user from Google signin",
+      );
+    } else if (!existingUser.emailVerified) {
+      const updatedUsers = await db
+        .update(users)
+        .set({ emailVerified: true })
+        .where(eq(users.id, existingUser.id))
+        .returning();
+
+      existingUser = updatedUsers[0];
+
+      logger.info(
+        { userId: existingUser!.id, email: googleProfile.email },
+        "Marked existing user as verified from Google signin",
+      );
+    }
+
+    const jwt = await signJwt(
+      { id: existingUser!.id, type: "parent" },
+      "urn:buddy:users",
+    );
+
+    logger.info(
+      { userId: existingUser!.id, email: googleProfile.email },
+      "Google signin successful",
+    );
+
+    return res.send({
+      success: true,
+      token: jwt,
+      reason: "",
+    });
+  } catch (error) {
+    logger.warn({ error }, "Google signin failed");
+    return res.send({
+      success: false,
+      reason: "Invalid Google token",
+      token: "",
+    });
+  }
 });
 
 router.post("/kid/link", async (req, res) => {
