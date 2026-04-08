@@ -2,9 +2,10 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 import express, { Request, Response, NextFunction } from "express";
 import { db } from "../src/db/db";
-import { linkedDevices, deviceConfig } from "../src/db/schema";
+import { linkedDevices, deviceConfig, users } from "../src/db/schema";
 import { eq } from "drizzle-orm";
 import createParentRouter from "../src/routes/parent";
+import { redis } from "../src/db/redis/client";
 
 vi.mock("../src/middleware/auth", () => ({
   authParent: (req: Request, res: Response, next: NextFunction) => {
@@ -28,6 +29,8 @@ describe("Parent Routes", () => {
     app.use("/", createParentRouter(onlineDevices));
 
     await db.delete(deviceConfig).execute();
+    await db.update(users).set({ emailVerified: true }).where(eq(users.id, 1));
+    vi.mocked(redis.set).mockReset();
   });
 
   test("should get devices for parent", async () => {
@@ -125,5 +128,36 @@ describe("Parent Routes", () => {
       .expect(400);
 
     expect(response.body.success).toBe(false);
+  });
+
+  test("should generate one-time kid link code", async () => {
+    vi.mocked(redis.set).mockResolvedValueOnce("OK");
+
+    const response = await request(app).post("/parent/kid-link-code").expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.code).toMatch(/^[A-Z0-9]{3}-[A-Z0-9]{3}$/);
+    expect(response.body.expiresInSeconds).toBe(300);
+
+    const firstCall = vi.mocked(redis.set).mock.calls[0];
+    expect(firstCall).toBeDefined();
+    expect(firstCall?.[0]).toMatch(/^kid-link-code:[A-Z0-9]{3}-[A-Z0-9]{3}$/);
+    expect(firstCall?.[1]).toBe("1");
+    expect(firstCall?.[2]).toBe("EX");
+    expect(firstCall?.[3]).toBe(300);
+    expect(firstCall?.[4]).toBe("NX");
+  });
+
+  test("should reject kid link code generation when email is not verified", async () => {
+    await db
+      .update(users)
+      .set({ emailVerified: false })
+      .where(eq(users.id, 1));
+
+    const response = await request(app).post("/parent/kid-link-code").expect(400);
+
+    expect(response.body.success).toBe(false);
+    expect(response.body.reason).toContain("Verify your email");
+    expect(redis.set).not.toHaveBeenCalled();
   });
 });

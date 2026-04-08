@@ -2,12 +2,13 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import argon2 from "argon2";
 import * as jose from "jose";
 import { db } from "../src/db/db";
-import { users } from "../src/db/schema";
+import { users, linkedDevices } from "../src/db/schema";
 import { eq } from "drizzle-orm";
 import signinRouter from "../src/routes/signin";
 import type { Request, Response } from "express";
 import { verifyGoogleIdToken } from "../src/account/google";
 import { signJwt } from "../src/account/jwt";
+import { redis } from "../src/db/redis/client";
 
 const sendMail = vi.fn();
 
@@ -41,6 +42,7 @@ describe("Signin Routes", () => {
     vi.mocked(verifyGoogleIdToken).mockReset();
     vi.mocked(signJwt).mockReset();
     vi.mocked(signJwt).mockResolvedValue("signed-jwt");
+    vi.mocked(redis.getdel).mockReset();
   });
 
   function getRouteHandler(path: string, method: "get" | "post") {
@@ -273,5 +275,51 @@ describe("Signin Routes", () => {
     expect(String(response.body)).toContain(
       `action="/reset-password/${encodeURIComponent(token)}"`,
     );
+  });
+
+  test("should link a kid device with a valid one-time code", async () => {
+    const beforeDevices = await db
+      .select()
+      .from(linkedDevices)
+      .where(eq(linkedDevices.parentId, 1));
+
+    vi.mocked(redis.getdel).mockResolvedValueOnce("1");
+
+    const response = await invokeRoute("/kid/link", "post", {
+      body: {
+        code: "abc-123",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({
+      success: true,
+      token: "signed-jwt",
+      reason: "",
+    });
+    expect(redis.getdel).toHaveBeenCalledWith("kid-link-code:ABC-123");
+
+    const afterDevices = await db
+      .select()
+      .from(linkedDevices)
+      .where(eq(linkedDevices.parentId, 1));
+
+    expect(afterDevices.length).toBe(beforeDevices.length + 1);
+  });
+
+  test("should reject linking when code is expired or invalid", async () => {
+    vi.mocked(redis.getdel).mockResolvedValueOnce(null);
+
+    const response = await invokeRoute("/kid/link", "post", {
+      body: {
+        code: "ABC-123",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({
+      success: false,
+      reason: "Invalid or expired code",
+    });
   });
 });

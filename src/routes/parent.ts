@@ -1,11 +1,17 @@
 import express from "express";
 import { authParent } from "../middleware/auth";
 import { db } from "../db/db";
-import { deviceConfig, linkedDevices, users, alerts, galleryScanningMode } from "../db/schema";
+import { deviceConfig, linkedDevices, users, alerts } from "../db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { isValidPushToken } from "../notifications/push";
 import { logger } from "../lib/pino";
 import { z } from "zod";
+import { redis } from "../db/redis/client";
+import {
+  generateKidLinkCode,
+  getKidLinkCodeRedisKey,
+  KID_LINK_CODE_TTL_SECONDS,
+} from "../account/kid_link_code";
 
 /** Validates email verification code from user input */
 const VerifyEmailSchema = z.object({
@@ -169,6 +175,77 @@ function createParentRouter(
       return res
         .status(500)
         .json({ success: false, reason: "Failed to get profile" });
+    }
+  });
+
+  router.post("/parent/kid-link-code", authParent, async (req, res) => {
+    const parentId = req.user!.id;
+
+    try {
+      const parent = await db
+        .select({ emailVerified: users.emailVerified })
+        .from(users)
+        .where(eq(users.id, parentId))
+        .limit(1);
+
+      if (parent.length === 0) {
+        logger.warn({ parentId }, "User not found for kid link code request");
+        return res
+          .status(404)
+          .json({ success: false, reason: "User not found" });
+      }
+
+      if (!parent[0]!.emailVerified) {
+        logger.warn(
+          { parentId },
+          "Kid link code request rejected: parent email not verified",
+        );
+        return res.status(400).json({
+          success: false,
+          reason: "Verify your email in the parent app before linking devices",
+        });
+      }
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const code = generateKidLinkCode();
+        const redisKey = getKidLinkCodeRedisKey(code);
+
+        const stored = await redis.set(
+          redisKey,
+          parentId.toString(),
+          "EX",
+          KID_LINK_CODE_TTL_SECONDS,
+          "NX",
+        );
+
+        if (stored === "OK") {
+          logger.info(
+            { parentId },
+            "Generated one-time kid link code successfully",
+          );
+
+          return res.json({
+            success: true,
+            code,
+            expiresInSeconds: KID_LINK_CODE_TTL_SECONDS,
+          });
+        }
+      }
+
+      logger.warn(
+        { parentId },
+        "Failed to allocate unique kid link code after retries",
+      );
+      return res.status(503).json({
+        success: false,
+        reason: "Failed to generate link code, please try again",
+      });
+    } catch (e) {
+      logger.error({ error: e, parentId }, "Failed to generate kid link code");
+      return res.status(500).json({
+        success: false,
+        reason: "Failed to generate kid link code",
+      });
     }
   });
 

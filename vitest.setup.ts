@@ -88,6 +88,7 @@ vi.mock("./src/db/db", async () => {
 vi.mock("./src/db/redis/client", () => ({
   redis: {
     get: vi.fn(),
+    getdel: vi.fn(),
     set: vi.fn(),
     del: vi.fn(),
     pipeline: vi.fn(() => ({

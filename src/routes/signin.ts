@@ -10,6 +10,12 @@ import * as jose from "jose";
 import { getTransporter } from "../email/email";
 import { verifyGoogleIdToken } from "../account/google";
 import { randomUUID } from "node:crypto";
+import { redis } from "../db/redis/client";
+import {
+  getKidLinkCodeRedisKey,
+  KID_LINK_CODE_REGEX,
+  normalizeKidLinkCode,
+} from "../account/kid_link_code";
 
 /** Validates signin request body with email and password */
 const SigninBodySchema = z.object({
@@ -42,6 +48,15 @@ const ResetPasswordConfirmSchema = z.object({
 
 const GoogleSigninBodySchema = z.object({
   idToken: z.string().min(1, { error: "Google ID token can't be empty" }),
+});
+
+const KidLinkBodySchema = z.object({
+  code: z
+    .string()
+    .transform((value) => normalizeKidLinkCode(value))
+    .refine((value) => KID_LINK_CODE_REGEX.test(value), {
+      message: "Code must match AAA-AAA format",
+    }),
 });
 
 const router: express.Router = express.Router();
@@ -534,58 +549,71 @@ router.post("/signin/google", async (req, res) => {
 });
 
 router.post("/kid/link", async (req, res) => {
-  const body: Infer<typeof SigninBodySchema> = req.body;
-
-  const parsed = SigninBodySchema.safeParse(body);
+  const parsed = KidLinkBodySchema.safeParse(req.body);
 
   if (!parsed.success) {
     logger.warn({ error: parsed.error }, "Kid link validation failed");
     res.send({
       success: false,
-      reason: parsed.error,
+      reason: parsed.error.issues[0]?.message || "Invalid code format",
       token: "",
     });
     return;
   }
 
-  logger.info({ email: parsed.data.email }, "Kid link request initiated");
+  logger.info("Kid link request initiated with one-time code");
 
-  const existingUser = (
-    await db
-      .select()
-      .from(users)
-      .where(eq(users.email, parsed.data.email))
-      .limit(1)
-  )[0];
+  const redisKey = getKidLinkCodeRedisKey(parsed.data.code);
+  let parentIdRaw: string | null = null;
 
-  if (!existingUser) {
-    logger.warn(
-      { email: parsed.data.email },
-      "Kid link failed: user not found",
-    );
+  try {
+    parentIdRaw = await redis.getdel(redisKey);
+  } catch (error) {
+    logger.error({ error }, "Failed to consume kid link code from Redis");
     res.send({
       success: false,
-      reason: "Invalid email or password",
+      reason: "Failed to link device",
     });
     return;
   }
 
-  logger.debug({ email: parsed.data.email }, "User found for kid link");
-
-  const validPassword = await argon2.verify(
-    existingUser.password,
-    parsed.data.password,
-  );
-
-  if (!validPassword) {
+  if (!parentIdRaw) {
+    logger.warn("Kid link failed: code missing or expired");
     res.send({
       success: false,
-      reason: "Invalid email or password",
+      reason: "Invalid or expired code",
+    });
+    return;
+  }
+
+  const parentId = Number(parentIdRaw);
+  if (!Number.isInteger(parentId) || parentId <= 0) {
+    logger.error({ parentIdRaw }, "Kid link code resolved to invalid parent ID");
+    res.send({
+      success: false,
+      reason: "Invalid or expired code",
+    });
+    return;
+  }
+
+  const existingUser = (
+    await db.select().from(users).where(eq(users.id, parentId)).limit(1)
+  )[0];
+
+  if (!existingUser) {
+    logger.warn({ parentId }, "Kid link failed: parent not found");
+    res.send({
+      success: false,
+      reason: "Invalid or expired code",
     });
     return;
   }
 
   if (!existingUser.emailVerified) {
+    logger.warn(
+      { parentId },
+      "Kid link failed: parent email not verified",
+    );
     res.send({
       success: false,
       reason: "You must verify your email in the parent app before using Buddy",
@@ -606,7 +634,7 @@ router.post("/kid/link", async (req, res) => {
   );
 
   logger.info(
-    { deviceId: newDevice!.id, parentId: existingUser.id },
+    { deviceId: newDevice!.id, parentId },
     "New child device linked successfully",
   );
 
