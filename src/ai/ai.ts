@@ -31,7 +31,7 @@ function detectProvider(): AIProvider {
   return "openai";
 }
 
-function getAIConfig() {
+export function getAIConfig() {
   const provider = detectProvider();
   const apiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY;
   const modelName =

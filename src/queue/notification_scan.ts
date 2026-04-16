@@ -107,6 +107,8 @@ Talking with strangers is okay. Grooming isn't.
 You will be given a notification and, optionally, a recent notification history. Respond **only** with valid JSON structured as above. Do not include explanations, disclaimers, or any text outside the JSON.
 `;
 
+import { getAIConfig } from "../ai/ai";
+const provider = getAIConfig().provider;
 const RespSchema = z.object({
   dangerous: z.boolean(),
   category: z
@@ -114,7 +116,7 @@ const RespSchema = z.object({
     .or(z.literal("grooming"))
     .or(z.literal("other"))
     .or(z.null()),
-  confidence: z.number().min(0).max(1),
+  confidence: provider === "anthropic" ? z.number() : z.number().min(0).max(1),
   summary: z.string(),
 });
 
