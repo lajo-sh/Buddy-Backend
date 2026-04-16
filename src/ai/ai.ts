@@ -1,3 +1,4 @@
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { LanguageModel, generateObject } from "ai";
 import { ollama } from "ollama-ai-provider-v2";
 import { logger } from "../lib/pino";
@@ -116,41 +117,37 @@ export async function generateObjectChat<T>({
 
   const { provider, baseURL, modelName, apiKey } = getAIConfig();
 
+  if (provider === "anthropic") {
+    const anthropicModel = createAnthropic({
+      apiKey,
+      baseURL,
+    })(modelName);
+
+    return await generateObject(
+      system
+        ? { model: anthropicModel, schema, prompt, system }
+        : { model: anthropicModel, schema, prompt },
+    );
+  }
+
   const basePath = baseURL.replace(/\/$/, "");
 
-  const res =
-    provider === "anthropic"
-      ? await fetch(`${basePath}/messages`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-          },
-          body: JSON.stringify({
-            model: modelName,
-            max_tokens: 1000,
-            temperature: 0,
-            ...(system ? { system } : {}),
-            messages: [{ role: "user", content: prompt }],
-          }),
-        })
-      : await fetch(`${basePath}/chat/completions`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: modelName,
-            messages: [
-              ...(system ? [{ role: "system", content: system }] : []),
-              { role: "user", content: prompt },
-            ],
-            temperature: 0,
-            max_tokens: 1000,
-          }),
-        });
+  const res = await fetch(`${basePath}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: modelName,
+      messages: [
+        ...(system ? [{ role: "system", content: system }] : []),
+        { role: "user", content: prompt },
+      ],
+      temperature: 0,
+      max_tokens: 1000,
+    }),
+  });
 
   if (!res.ok) {
     const text = await res.text();
@@ -163,15 +160,9 @@ export async function generateObjectChat<T>({
 
   const data = (await res.json()) as {
     choices?: Array<{ message?: { content?: string }; text?: string }>;
-    content?: Array<{ type?: string; text?: string }>;
   };
   const content: string =
-    provider === "anthropic"
-      ? (data.content ?? [])
-          .filter((part) => part.type === "text")
-          .map((part) => part.text ?? "")
-          .join("\n")
-      : (data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? "");
+    data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? "";
 
   // Try to parse JSON from the assistant content. If it fails, throw a helpful error.
   let parsed: unknown;
