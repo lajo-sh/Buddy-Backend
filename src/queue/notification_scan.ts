@@ -1,8 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import { connection } from "../db/redis/info";
 import { redis } from "../db/redis/client";
-import { model } from "../ai/ai";
-import { generateObject } from "ai";
+import { generateObjectChat } from "../ai/ai";
 import { z } from "zod";
 import { db } from "../db/db";
 import { linkedDevices, deviceConfig, users, alerts } from "../db/schema";
@@ -146,8 +145,7 @@ export const notificationScanWorker = new Worker(
       userMessage = `${notification.packageName} || ${notification.title} || ${notification.message}`;
     }
 
-    const { object: response } = await generateObject({
-      model,
+    const { object: response } = await generateObjectChat({
       schema: RespSchema,
       prompt: userMessage,
       system: SYSTEM_PROMPT,
